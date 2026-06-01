@@ -180,5 +180,125 @@ PY
 
 After conversion, load via `swm.policy.AutoCostModel('pusht/lewm')` as usual.
 
+## Examples & demos (`examples/`)
+
+The `examples/` directory contains self-contained scripts built on top of LeWM — from a minimal toy
+to a full "neural simulator" demo. The LeWM-core demos import the model straight from
+`jepa.py`/`module.py`; the explosion demo is **fully standalone** and needs only
+`torch`, `numpy`, `einops`, `matplotlib`, `Pillow`, `scikit-learn` (no `stable-worldmodel`).
+
+Generated datasets, checkpoints, and media land under
+`examples/{explosion_data,explosion_ckpt,explosion_viz,viz_progress,runs}/` and are **git-ignored** —
+regenerate them locally with the commands below. Heavy training is best run on a workstation GPU.
+
+### 1. Toy LeWM — synthetic "moving ball" world
+
+`examples/train_toy.py` trains the real `JEPA` + LeWM objective (next-embedding prediction + `SIGReg`)
+on a tiny controllable world, with only the heavy ViT encoder swapped for a small CNN. Runs in ~2 min
+and demonstrates the paper's thesis directly: **SIGReg alone prevents collapse**.
+
+```bash
+python examples/train_toy.py --compare --plan
+```
+
+`--compare` trains with vs. without SIGReg (without → the latent collapses, `emb_std → 0`, prediction
+loss → ~0 but the representation is useless); `--plan` runs a latent-space CEM to reach a goal image.
+
+### 2. Genuine `train.py` on real data + visualization
+
+See **`examples/real_data_run.md`** for the exact working recipe to run the real pipeline on the
+two-room dataset (installing `stable-worldmodel[train]`, downloading the data, and the memory-safe
+dataloader flags). After a run, visualize it:
+
+```bash
+# render the held-out rollout at every checkpoint + a summary of how predictions sharpen over epochs
+python examples/viz_over_epochs.py
+# fit a pixel decoder on the frozen LeWM latents, then render true / decode(true) / decode(pred)
+python examples/train_decoder.py --ckpt lewm/weights_epoch_100.pt
+python examples/viz_decoded_rollout.py
+```
+
+(`rollout_lib.py` is the shared rollout/decoder library; `visualize_rollout.py` is a single-checkpoint
+nearest-neighbour-decoded variant.)
+
+### 3. Explosion neural-sim surrogate (no Houdini needed)
+
+A complete *"fast neural surrogate for an explosion sim"* demo: a synthetic pyro engine produces
+`params → video` data, a LeWM-style latent dynamics model learns to predict the explosion from the
+inputs, and those inputs can be **planned** to art-direct the result.
+
+**a. The synthetic pyro engines** — a grid-based **2D** solver (`explosion_sim.py`, a real
+Stable-Fluids fluid sim) and a **3D** particle/fragment engine (`explosion3d_sim.py`: an object bursts
+into fragments + sparks + a fireball + smoke, perspective camera). Preview either:
+
+```bash
+python examples/explosion3d_sim.py --n 6      # 3D (used for the surrogate)
+python examples/explosion_sim.py   --n 6      # 2D grid fluid
+```
+
+Both are driven by **8 Houdini-style inputs**, deterministic so the sim is a clean `params → video`
+function (which is what makes it a learnable, plannable surrogate target):
+
+| input | Houdini pyro / RBD analog |
+|---|---|
+| `ex, ez` | source / emitter position |
+| `blast` | ignition temperature / fuel (+ debris energy) |
+| `buoyancy` | buoyancy lift |
+| `wind_x, wind_z` | wind / forces |
+| `scatter` | turbulence / disturbance (debris up-bias) |
+| `dissipation` | dissipation / cooling |
+
+**b. Generate the dataset:**
+
+```bash
+python examples/gen_explosion_dataset.py --n 2000
+# -> examples/explosion_data/frames.npy (uint8, N×32×3×112×112) + params.npy (N×8)
+```
+
+**c. Train the surrogate** (the "action" is the 8 params, broadcast to every timestep):
+
+```bash
+# single-vector latent — faithful to LeWM's CLS-token design (coarse decoded frames)
+python examples/train_explosion_surrogate.py     # -> explosion_ckpt/model.pt + decoder.pt
+# spatial latent — conv feature map + FiLM conv predictor (much crisper frames)
+python examples/train_explosion_spatial.py       # -> explosion_ckpt/spatial.pt
+```
+
+The single-vector model is the LeWM-faithful version (CNN encoder → one 256-d token, `ARPredictor`,
+`SIGReg`, + a separate pixel decoder). The spatial model keeps a `C×14×14` feature map and trains an
+autoencoder + action-conditioned conv predictor jointly with a rollout pixel loss, so decoded
+predictions are sharp. If the 16 GB defaults are tight, trim `--batch` (40) or `--R` (rollout
+horizon, 4).
+
+**d. Forward rollout — surrogate vs. ground truth** (the surrogate gets the first 3 frames + the
+params, then imagines the rest; writes a montage **and** a side-by-side GIF for slides):
+
+```bash
+python examples/viz_explosion_spatial.py    # spatial (crisp) -> explosion_viz/spatial_rollout_*.png + .gif
+python examples/viz_explosion_rollout.py    # single-vector variant
+```
+
+**e. Planning / art-direction** — optimize the 8 inputs with CEM *evaluated through the fast
+surrogate*, then verify by running the true sim once:
+
+```bash
+# recover the inputs of a target (held-out) explosion
+python examples/plan_explosion.py
+# abstract art-direction: specify a target SHAPE (tall / wide / left) -> plan inputs -> GIFs
+python examples/plan_explosion_art.py       # -> explosion_viz/art_direction.png + art_*.gif
+```
+
+**f. Timing** — surrogate (full rollout+decode, and latent-only for planning) vs. the sim:
+
+```bash
+python examples/bench_explosion.py
+```
+
+**Honest caveats.** The 3D engine is a particle/RBD-style system (not a voxel fluid) with an additive
+"night explosion" render, and the surrogate is an **approximate previz** model — not, and not meant to
+be, Houdini-identical. Its value is a fast, batchable, *plannable* approximation; the single-vector
+latent yields coarse decoded frames (bloom / spread / timing, not crisp debris), while the spatial
+latent is markedly sharper.
+
 ## Contact & Contributions
 Feel free to open [issues](https://github.com/lucas-maes/le-wm/issues)! For questions or collaborations, please contact `lucas.maes@mila.quebec`
