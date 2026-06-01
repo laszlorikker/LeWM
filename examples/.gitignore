@@ -1,0 +1,9 @@
+runs/
+__pycache__/
+*.png
+*.npy
+*.pt
+viz_progress/
+explosion_data/
+explosion_ckpt/
+explosion_viz/

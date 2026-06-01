@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# local run / training artifacts
+lightning_logs/
+outputs/
+wandb/
+.venv/
+venv/
+
+# generated demo datasets, checkpoints, and media (regenerate locally; never commit)
+examples/explosion_data/
+examples/explosion_ckpt/
+examples/viz_progress/
+examples/explosion_viz/
+examples/runs/
+*.npy
+*.pt
+*.ckpt
